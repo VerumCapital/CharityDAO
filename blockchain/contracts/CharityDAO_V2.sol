@@ -1,27 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
-// import "@openzeppelin/contracts/utils/proposalCounters.sol";
-// import "@openzeppelin/contracts/utils/math/SignedSafeMath.sol";
-// import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
-
 contract CharityDAO {
-    
     /// @notice TEST ONLY: Please do not include the next function unless testing. This will make the contract vulnerable to attack and may end up giving away the funds. Please DYOR
     /// @dev TESNET ONLY FUNCTION TO SAVE YOUR INVALUABLE ETHER. DO NOT TAKE IT TO MAINNET DEPLOYMENT
     ////////////////////////////////////////////////////////////////////////////////////////
 
-    function wipeBalance() public{
+    function wipeBalance() public {
         require(isAdmin[msg.sender], "Requester should be an admin official");
-        payable(msg.sender).transfer(
-                address(this).balance
-            );
-        
+        payable(msg.sender).transfer(address(this).balance);
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////
-
 
     /// @notice The structure for how a voting rights request will be made
     /// @dev Make sure any addition doesn't lead to the 16 variable limit, errors like `stack too deep` may occur
@@ -34,6 +24,13 @@ contract CharityDAO {
         uint256 againstVotesGov;
     }
 
+    struct Status {
+        bool isProposedByAdmin;
+        bool isApproved;
+        bool isPassed;
+        bool isOver;
+    }
+
     struct Proposal {
         uint256 proposalID;
         uint256 proposalPrice;
@@ -44,9 +41,7 @@ contract CharityDAO {
         string proposalDesc;
         address payable beneficiaryWallet;
         address proposerWallet;
-        bool isProposedByAdmin;
-        bool isApproved;
-        bool isPassed;
+        Status status;
     }
 
     struct votingRightsDonationProposal {
@@ -72,7 +67,8 @@ contract CharityDAO {
     mapping(address => Proposal[]) public myProposals;
     mapping(address => mapping(uint256 => bool)) public hasVotedToProposal;
     mapping(address => uint256) public totalIndividualDonations;
-    mapping(address => votingRightsDonationProposal) public myVotingRightsRequest;
+    mapping(address => votingRightsDonationProposal)
+        public myVotingRightsRequest;
 
     votingRightsDonationProposal[] public votingRightsRequestQueue;
     Proposal[] public allProposals;
@@ -96,6 +92,22 @@ contract CharityDAO {
         require(
             isAdmin[msg.sender],
             "This method can only be called by an admin"
+        );
+        _;
+    }
+
+    modifier deadlineOverCheck(uint256 _id) {
+        require(
+            block.timestamp >= allProposals[_id].voteDeadline,
+            "Deadline not passed yet"
+        );
+        _;
+    }
+
+    modifier deadlineUnderCheck(uint256 _id) {
+        require(
+            block.timestamp < allProposals[_id].voteDeadline,
+            "Deadline has already passed"
         );
         _;
     }
@@ -151,11 +163,14 @@ contract CharityDAO {
         }
     }
 
-    function donateVotingRights(uint256 _id, uint256 _amountOfRights) public{
-        require(_amountOfRights<votingRights[msg.sender], "Not enough to donate the requested amount");
+    function donateVotingRights(uint256 _id, uint256 _amountOfRights) public {
+        require(
+            _amountOfRights < votingRights[msg.sender],
+            "Not enough to donate the requested amount"
+        );
         votingRightsRequestQueue[_id].hasBeenDonated += _amountOfRights;
         votingRights[votingRightsRequestQueue[_id].proposer] += _amountOfRights;
-        votingRights[msg.sender]-=_amountOfRights;
+        votingRights[msg.sender] -= _amountOfRights;
         emit InfoMessage("Your rights has been donated successfully!");
     }
 
@@ -194,10 +209,10 @@ contract CharityDAO {
         public
         isCallerAdmin
     {
-        require(allProposals[_id].isApproved, "The proposal isn't approved");
+        require(allProposals[_id].status.isApproved, "The proposal isn't approved");
         Proposal storage modifyProposal = allProposals[_id];
         require(
-            modifyProposal.isApproved,
+            modifyProposal.status.isApproved,
             "Unapproved proposals cannot undergo a ballot seclusion change"
         );
         modifyProposal.ballotSeclusion = _value;
@@ -233,9 +248,11 @@ contract CharityDAO {
             proposalDesc: _proposalDesc,
             beneficiaryWallet: _beneficiaryWallet,
             proposerWallet: msg.sender,
-            isProposedByAdmin: isProposerAdmin,
-            isApproved: isDefaultApproved,
-            isPassed: false
+            status: Status(isProposerAdmin, isDefaultApproved, false, false)
+            // isProposedByAdmin: isProposerAdmin,
+            // isApproved: isDefaultApproved,
+            // isPassed: false,
+            // isOver: false
         });
 
         allProposals.push(newProposal);
@@ -245,7 +262,6 @@ contract CharityDAO {
         emit InfoMessage("Your Proposal has been submitted successfully!");
         return (true);
     }
-
 
     function makeRightsDonationProposal(string memory _pitch) public {
         require(!isAdmin[msg.sender], "Admins can't request");
@@ -261,40 +277,83 @@ contract CharityDAO {
         myVotingRightsRequest[msg.sender] = newProposal;
         rightsDonationCounter++;
 
-        emit InfoMessage("Your 'Rights' Donation request has been submitted successfully!");
+        emit InfoMessage(
+            "Your 'Rights' Donation request has been submitted successfully!"
+        );
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////
-
 
     /// @notice Place where votes are counted!
     /// @dev Same function is used for counting both for and against
     ////////////////////////////////////////////////////////////////////////////////////////
 
-    function vote(uint256 _proposalId, bool _vote) public{
-        require(!hasVotedToProposal[msg.sender][_proposalId], "Already voted for this proposal. Cannot re-cast");
+    function vote(uint256 _proposalId, bool _vote)
+        public
+        deadlineUnderCheck(_proposalId)
+    {
+        require(
+            !hasVotedToProposal[msg.sender][_proposalId],
+            "Already voted for this proposal. Cannot re-cast"
+        );
+        require(
+            !allProposals[_proposalId].status.isOver,
+            "Already Processed and cannot be voted upon now"
+        );
         Proposal storage proposal = allProposals[_proposalId];
-        if(_vote && isAdmin[msg.sender]){
-            proposal.ballot.forVotesGov +=1;
-        }
-        else if(_vote && !isAdmin[msg.sender]){
+        if (_vote && isAdmin[msg.sender]) {
+            proposal.ballot.forVotesGov += 1;
+        } else if (_vote && !isAdmin[msg.sender]) {
             proposal.ballot.forVotes += votingRights[msg.sender];
-        }
-        else if(!_vote && isAdmin[msg.sender]){
+        } else if (!_vote && isAdmin[msg.sender]) {
             proposal.ballot.againstVotesGov += 1;
-        }
-        else if(!_vote && !isAdmin[msg.sender]){
+        } else if (!_vote && !isAdmin[msg.sender]) {
             proposal.ballot.againstVotes += votingRights[msg.sender];
         }
-        hasVotedToProposal[msg.sender][_proposalId]=true;
+        hasVotedToProposal[msg.sender][_proposalId] = true;
         emit InfoMessage("Your vote has been casted successfully!");
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////
-    
-    
 
-
-
-
+    function processProposal(uint256 _proposalId)
+        public
+        deadlineOverCheck(_proposalId)
+    {
+        require(!allProposals[_proposalId].status.isOver, "Already Processed");
+        require(
+            allProposals[_proposalId].status.isApproved,
+            "Unapproved proposals can't be processed"
+        );
+        require(
+            allProposals[_proposalId].proposalPrice < address(this).balance,
+            "Not enough funds to send if proposal succeeds. Wait till treasury grows"
+        );
+        Ballot storage allVotes = allProposals[_proposalId].ballot;
+        bool govDecision = allVotes.forVotesGov > allVotes.againstVotesGov
+            ? true
+            : false;
+        bool decision = allVotes.forVotes > allVotes.againstVotes
+            ? true
+            : false;
+        uint256 count = (allProposals[_proposalId].ballotSeclusion) *
+            (govDecision ? 1 : 0) +
+            (100 - allProposals[_proposalId].ballotSeclusion) *
+            (decision ? 1 : 0);
+        if (count > 50) {
+            require(
+                allProposals[_proposalId].proposalPrice < address(this).balance,
+                "Not enough funds to send if proposal succeeds. Wait till treasury grows"
+            );
+            allProposals[_proposalId].status.isPassed = true;
+            allProposals[_proposalId].status.isOver = true;
+            (bool isTransferred, bytes memory data) = allProposals[_proposalId]
+                .beneficiaryWallet
+                .call{value: allProposals[_proposalId].proposalPrice}("");
+            require(isTransferred, "Transaction failed");
+        } else {
+            allProposals[_proposalId].status.isPassed = false;
+            allProposals[_proposalId].status.isOver = true;
+        }
+    }
 }
