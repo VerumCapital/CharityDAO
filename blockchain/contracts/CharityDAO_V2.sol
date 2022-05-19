@@ -243,7 +243,7 @@ contract CharityDAO {
             proposalPrice: _proposalPrice,
             ballotSeclusion: globalBallotSeclusion,
             ballot: Ballot(0, 0, 0, 0),
-            voteDeadline: globalVoteDeadline,
+            voteDeadline: block.timestamp+globalVoteDeadline,
             proposalName: _proposalName,
             proposalDesc: _proposalDesc,
             beneficiaryWallet: _beneficiaryWallet,
@@ -354,6 +354,10 @@ contract CharityDAO {
         } else {
             allProposals[_proposalId].status.isPassed = false;
             allProposals[_proposalId].status.isOver = true;
+        }
+        if(!isAdmin[msg.sender]){
+            votingRights[msg.sender]+= 1000;
+            emit InfoMessage("Proposal has been processed successfully, and processor gets 1000 voting rights!");
         }
     }
 }
